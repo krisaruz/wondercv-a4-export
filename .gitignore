@@ -1,0 +1,13 @@
+.chrome-wondercv-profile/
+.pdf_pages/
+accept_preview/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+accept_report.json
+resume_a4.pdf
+.wondercv*
+*.png
+!docs/**

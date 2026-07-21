@@ -1,0 +1,32 @@
+---
+description: WonderCV 简历导出为高清 A4 两页 PDF 的标准流程（必须遵循）
+alwaysApply: true
+---
+
+# WonderCV → A4 PDF
+
+完整说明见 `docs/WONDERCV_A4_EXPORT.md`。
+
+## 用户要导出 / 复现 PDF 时
+
+1. **主路径唯一推荐**：`python export_resume.py`（实现于 `_capture_via_cdp.py`）
+2. 先确保已登录编辑页：优先让用户运行 `start_chrome_debug.bat`（CDP 9222）
+3. 输出：`resume_a4.pdf`、`accept_preview/snap_page_*.png`、`accept_report.json`
+
+## 禁止
+
+- 用 html2canvas / `wondercv_capture_pages.js` 当主方案（会叠字）
+- 手搓 HTML 声称「与线上一模一样」却不截预览页
+- 对整棵 DOM 批量 `height/overflow: auto !important`「解锁」（会毁顶栏，出现大块深蓝）
+- 机器 `pass: true` 但未 **Read** 两张 preview 图做目检就对用户说验收通过
+
+## 验收
+
+- 2 页 A4；截图宽 ≥ 1400（scale=4 更佳）
+- 第 1 页有头像/姓名/卡片；第 2 页上半有正文
+- 尽量无「超级简历/仅供预览」水印与右下角客服浮层
+- 第 2 页底部留白是线上分页正常现象
+
+## 依赖
+
+`playwright`、`pillow`、`pypdf`、`img2pdf` + 系统 Chrome
