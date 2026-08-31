@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import base64
 import io
 import json
 import sys
@@ -239,16 +240,100 @@ def capture_with_page(page, scale: float = 3.0):
 }"""
 
     imgs = []
+    client = page.context.new_cdp_session(page)
+    # Emulation override 是 per-session 的，新 CDP session 不继承 prepare_page 设的状态，
+    # 必须在同一个 session 里重新设。
+    # height 留足余量（一页约 1018，给 1500），保证元素完整在视口内，避免 clip 被视口裁剪
+    metrics = page.evaluate(
+        "() => ({w: Math.max(1200, window.innerWidth), h: Math.max(1500, window.innerHeight)})"
+    )
+    client.send(
+        "Emulation.setDeviceMetricsOverride",
+        {
+            "width": int(metrics["w"]),
+            "height": int(metrics["h"]),
+            "deviceScaleFactor": scale,
+            "mobile": False,
+        },
+    )
+    page.wait_for_timeout(500)
+
+    # 切到 print media：编辑页的 fixed/sticky 顶栏、侧边工具栏在 print 下通常不显示，
+    # 简历正文不受遮挡，截图顶部不会被 WonderCV UI 盖住
+    try:
+        client.send("Emulation.setEmulatedMedia", {"media": "print"})
+        page.wait_for_timeout(500)
+    except Exception as e:
+        print("setEmulatedMedia print fail:", e)
+
     for i in range(2):
         page.evaluate(hide_floaters)
         loc = page.locator("[data-resume-page]").nth(i)
-        loc.scroll_into_view_if_needed()
-        page.wait_for_timeout(400)
+        # 手动 scrollIntoView 顶部对齐，并等滚动稳定。
+        # scroll_into_view_if_needed 在某些布局下不会把顶部对齐到视口顶，
+        # 导致 bounding_box.y 为负，CDP clip 会把负 y clamp 到 0 → 顶部被裁。
+        page.evaluate(
+            """(idx) => {
+              const el = document.querySelectorAll('[data-resume-page]')[idx];
+              if (el) el.scrollIntoView({block: 'start', inline: 'start'});
+            }""",
+            i,
+        )
+        page.wait_for_timeout(600)
         page.evaluate(hide_floaters)
-        png = loc.screenshot(type="png")
-        im = Image.open(io.BytesIO(png)).convert("RGB")
+        page.wait_for_timeout(200)
+        box = loc.bounding_box()
+        if not box:
+            raise RuntimeError(f"第{i+1}页 bounding_box 为空")
+        if box["y"] < 0:
+            # 元素顶部仍在视口上方，再滚一次
+            page.evaluate(
+                """(idx) => {
+                  const el = document.querySelectorAll('[data-resume-page]')[idx];
+                  if (el) el.scrollIntoView({block: 'start'});
+                }""",
+                i,
+            )
+            page.wait_for_timeout(500)
+            box = loc.bounding_box()
+        if box["y"] < 0:
+            # 还不行就强制 window.scrollTo 让元素顶到视口顶
+            page.evaluate(
+                """(idx) => {
+                  const el = document.querySelectorAll('[data-resume-page]')[idx];
+                  if (!el) return;
+                  const r = el.getBoundingClientRect();
+                  window.scrollBy(0, r.top - 8);
+                }""",
+                i,
+            )
+            page.wait_for_timeout(500)
+            box = loc.bounding_box()
+        if box["y"] < 0 or box["y"] + box["height"] > metrics["h"]:
+            print(f"warn: page{i+1} box 仍不在视口内，y={box['y']}, h={box['height']}")
+        r = client.send(
+            "Page.captureScreenshot",
+            {
+                "format": "png",
+                "captureBeyondViewport": True,
+                "clip": {
+                    "x": box["x"],
+                    "y": max(0.0, box["y"]),
+                    "width": box["width"],
+                    "height": box["height"],
+                    "scale": 1,
+                },
+            },
+        )
+        im = Image.open(io.BytesIO(base64.b64decode(r["data"]))).convert("RGB")
         imgs.append(im)
-        print(f"page{i+1} size:", im.size)
+        print(f"page{i+1} size:", im.size, "css box:", [round(v, 1) for v in (box["x"], box["y"], box["width"], box["height"])])
+
+    # 还原 media，避免影响后续
+    try:
+        client.send("Emulation.setEmulatedMedia", {"media": ""})
+    except Exception:
+        pass
 
     return imgs[0], imgs[1], page.url
 

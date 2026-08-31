@@ -59,6 +59,13 @@ def run_export(url: str, scale: float) -> int:
             if "auth" in page.url or "signin" in page.url:
                 print("当前未登录：请在 debug Chrome 中登录编辑页后重试")
                 return 4
+            # 列表页/其它页 → 导航到目标编辑页
+            if "/editor" not in (page.url or ""):
+                print(f"导航到编辑页：{url}")
+                page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                if "auth" in page.url or "signin" in page.url:
+                    print("导航后跳到登录页，请登录后重试")
+                    return 4
         else:
             print("无 CDP 9222，使用 .chrome-wondercv-profile …")
             print("提示：更稳妥请先运行 start_chrome_debug.bat")
@@ -80,12 +87,37 @@ def run_export(url: str, scale: float) -> int:
             if page is None:
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=90000)
-            try:
-                page.wait_for_selector("[data-resume-page]", timeout=120000)
-            except Exception:
-                print("未检测到预览，url=", page.url)
-                context.close()
-                return 4
+
+            # 若未登录或预览未就绪，把窗口交给你手动操作；就绪后回车继续
+            def _preview_ready() -> bool:
+                try:
+                    return page.locator("[data-resume-page]").count() >= 2
+                except Exception:
+                    return False
+
+            if not _preview_ready():
+                print(
+                    "\n========================================\n"
+                    "未检测到两页预览。请在弹出的 Chrome 窗口里：\n"
+                    "  1) 登录 WonderCV 账号\n"
+                    "  2) 打开编辑页确认两页预览正常显示\n"
+                    f"  目标 URL：{url}\n"
+                    "  3) 回到这个终端按 回车 继续\n"
+                    "========================================"
+                )
+                try:
+                    sys.stdin.readline()
+                except Exception:
+                    pass
+                deadline_attempts = 30
+                for _ in range(deadline_attempts):
+                    if _preview_ready():
+                        break
+                    page.wait_for_timeout(1000)
+                if not _preview_ready():
+                    print("仍未检测到两页预览，url=", page.url)
+                    context.close()
+                    return 4
 
         im1, im2, final_url = core.capture_with_page(page, scale=scale)
         report["url"] = final_url
